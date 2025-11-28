@@ -19,6 +19,7 @@
   },
   "homepage": "https://github.com/KristekQQ/SFX-HotSwap#readme",
   "dependencies": {
+    "archiver": "^6.0.2",
     "express": "^5.1.0",
     "multer": "^2.0.2"
   }

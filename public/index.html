@@ -223,6 +223,19 @@
       color: var(--muted);
       min-height: 20px;
     }
+    .live-log {
+      max-height: 220px;
+      overflow: auto;
+      background: rgba(0,0,0,0.18);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 10px;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+      line-height: 1.35;
+      color: #dbeafe;
+      white-space: pre-wrap;
+    }
     .checkbox {
       display: inline-flex;
       align-items: center;
@@ -292,6 +305,7 @@
           <h3>Rychlé akce</h3>
           <div class="actions">
             <button id="autoPair">Párovat podle názvu</button>
+            <button class="secondary" id="downloadZip">Stáhnout ZIP</button>
             <label class="checkbox"><input type="checkbox" id="runStart" checked> spustit start.js po výměně</label>
           </div>
         </div>
@@ -318,6 +332,11 @@
         <button id="apply">Vyměnit zvuky</button>
         <div class="log" id="log"></div>
       </div>
+
+      <div class="card" style="margin-top:14px;">
+        <h3>Log start.js</h3>
+        <div class="live-log" id="liveLog"></div>
+      </div>
     </div>
   </div>
 
@@ -343,10 +362,13 @@
     const fileInput = document.getElementById('fileInput');
     const pickFiles = document.getElementById('pickFiles');
     const autoPairBtn = document.getElementById('autoPair');
+    const downloadZipBtn = document.getElementById('downloadZip');
     const applyBtn = document.getElementById('apply');
     const logBox = document.getElementById('log');
     const runStartCheckbox = document.getElementById('runStart');
     const clearPairsBtn = document.getElementById('clearPairs');
+    const liveLog = document.getElementById('liveLog');
+    let logStream;
 
     init();
 
@@ -354,6 +376,8 @@
       await loadConfig();
       await fetchGames();
       bindEvents();
+      await loadLogs();
+      startLogStream();
     }
 
     function bindEvents() {
@@ -374,6 +398,7 @@
         handleFiles(e.dataTransfer.files);
       });
       autoPairBtn.addEventListener('click', () => { autoPair(); render(); });
+      downloadZipBtn.addEventListener('click', downloadZip);
       applyBtn.addEventListener('click', applyChanges);
       clearPairsBtn.addEventListener('click', () => { state.pairs.clear(); render(); });
     }
@@ -426,6 +451,22 @@
       state.selectedGame = gameSelect.value;
       await loadSounds();
       setLog('Hry načteny.');
+    }
+
+    async function loadLogs() {
+      try {
+        const res = await fetch('/api/logs');
+        const data = await res.json();
+        renderLog(data.logs || []);
+      } catch {}
+    }
+
+    function startLogStream() {
+      if (logStream) logStream.close();
+      logStream = new EventSource('/api/logs/stream');
+      logStream.onmessage = (ev) => {
+        appendLogLine(ev.data);
+      };
     }
 
     async function loadSounds() {
@@ -622,8 +663,19 @@
       }
     }
 
+    function downloadZip() {
+      if (!state.selectedGame) {
+        setLog('Vyber hru.');
+        return;
+      }
+      setLog('Stahuji ZIP...');
+      const url = `/api/games/${encodeURIComponent(state.selectedGame)}/zip`;
+      window.open(url, '_blank');
+    }
+
     function stripExt(name) {
-      return name.replace(/\.[^.]+$/, '');
+      const idx = name.indexOf('.');
+      return idx === -1 ? name : name.slice(0, idx);
     }
 
     function formatSize(bytes) {
@@ -640,6 +692,16 @@
 
     function setLog(msg) {
       logBox.textContent = msg;
+    }
+
+    function renderLog(lines) {
+      liveLog.textContent = lines.join('\n');
+      liveLog.scrollTop = liveLog.scrollHeight;
+    }
+
+    function appendLogLine(line) {
+      liveLog.textContent += (liveLog.textContent ? '\n' : '') + line;
+      liveLog.scrollTop = liveLog.scrollHeight;
     }
   </script>
 </body>
