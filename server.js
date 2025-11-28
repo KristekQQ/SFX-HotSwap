@@ -5,12 +5,14 @@ const fssync = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 const crypto = require('crypto');
+const archiver = require('archiver');
 
 const app = express();
 const PORT = process.env.PORT || 4173;
 const DEFAULT_RESOURCES_ROOT = '/mnt/c/Users/Jan Křístek/WebstormProjects/wcgames7/resources-games';
 const CONFIG_FILE = path.join(__dirname, 'config.local.json');
 const AUDIO_EXTENSIONS = new Set(['.ogg', '.mp3', '.wav', '.flac', '.aac', '.m4a']);
+const LOG_LIMIT = 500;
 
 const uploadDir = path.join(__dirname, 'uploads');
 if (!fssync.existsSync(uploadDir)) {
@@ -29,6 +31,8 @@ const upload = multer({ storage });
 
 const uploadedFiles = new Map();
 let runningStartProcess = null;
+const logBuffer = [];
+const logClients = new Set();
 
 app.use(express.json({ limit: '25mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
@@ -55,6 +59,19 @@ async function loadConfigFromDisk() {
 function saveConfigToDisk() {
   const payload = { resourcesRoot: state.resourcesRoot };
   return fs.writeFile(CONFIG_FILE, JSON.stringify(payload, null, 2));
+}
+
+function pushLog(message) {
+  const entry = `[${new Date().toISOString()}] ${message}`;
+  logBuffer.push(entry);
+  if (logBuffer.length > LOG_LIMIT) {
+    logBuffer.splice(0, logBuffer.length - LOG_LIMIT);
+  }
+  for (const res of logClients) {
+    res.write(`data: ${entry}\n\n`);
+  }
+  // Also mirror to server stdout for visibility
+  console.log(entry);
 }
 
 async function updateRoots(resourcesRoot, persist = true) {
@@ -156,20 +173,44 @@ async function writeProperties(gameName) {
   await fs.writeFile(state.propertiesPath, JSON.stringify(data, null, 2));
 }
 
+function stopStartJs(reason = 'stop') {
+  if (!runningStartProcess || runningStartProcess.killed) {
+    return Promise.resolve({ stopped: false, reason: 'not running' });
+  }
+  pushLog(`Killing start.js (PID ${runningStartProcess.pid}) – ${reason}`);
+  return new Promise(resolve => {
+    const timer = setTimeout(() => {
+      if (runningStartProcess && !runningStartProcess.killed) {
+        runningStartProcess.kill('SIGKILL');
+      }
+    }, 3000);
+    runningStartProcess.once('exit', (code, signal) => {
+      clearTimeout(timer);
+      pushLog(`start.js ukončen (code ${code}, signal ${signal || 'none'})`);
+      resolve({ stopped: true, code, signal });
+    });
+    runningStartProcess.kill('SIGTERM');
+  });
+}
+
 function startStartJs() {
   if (!fssync.existsSync(state.startScriptPath)) {
-    return { started: false, reason: 'start.js not found' };
-  }
-  if (runningStartProcess && !runningStartProcess.killed) {
-    return { started: false, reason: 'start.js already running', pid: runningStartProcess.pid };
+    const reason = 'start.js not found';
+    pushLog(reason);
+    return { started: false, reason };
   }
   const proc = spawn('node', ['start.js'], {
     cwd: state.wcgamesRoot,
-    stdio: 'inherit',
+    stdio: ['ignore', 'pipe', 'pipe'],
     detached: false
   });
   runningStartProcess = proc;
-  proc.on('exit', () => {
+  pushLog(`Spouštím start.js (PID ${proc.pid})`);
+
+  proc.stdout.on('data', chunk => pushLog(chunk.toString().trimEnd()));
+  proc.stderr.on('data', chunk => pushLog(`ERR ${chunk.toString().trimEnd()}`));
+  proc.on('exit', (code, signal) => {
+    pushLog(`start.js skončil (code ${code}, signal ${signal || 'none'})`);
     runningStartProcess = null;
   });
   return { started: true, pid: proc.pid };
@@ -203,6 +244,25 @@ app.post('/api/config/path', async (req, res) => {
   }
 });
 
+app.get('/api/logs', (_req, res) => {
+  res.json({ logs: logBuffer });
+});
+
+app.get('/api/logs/stream', (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+  logClients.add(res);
+  // send backlog
+  for (const entry of logBuffer) {
+    res.write(`data: ${entry}\n\n`);
+  }
+  req.on('close', () => {
+    logClients.delete(res);
+  });
+});
+
 app.get('/api/games', async (_req, res) => {
   try {
     const games = await listGames();
@@ -218,6 +278,39 @@ app.get('/api/games/:game/sounds', async (req, res) => {
     await ensureGameExists(game);
     const sounds = await listSounds(game);
     res.json({ sounds });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get('/api/games/:game/zip', async (req, res) => {
+  try {
+    const { game } = req.params;
+    const gameDir = await ensureGameExists(game);
+    const sounds = await listSounds(game);
+
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="sfx-${game}.zip"`);
+
+    const archive = archiver('zip', { zlib: { level: 0 } }); // store, no compression
+    archive.on('error', err => {
+      pushLog(`ZIP error: ${err.message}`);
+      res.status(500).end();
+    });
+    archive.on('warning', err => {
+      if (err.code === 'ENOENT') {
+        pushLog(`ZIP warning: ${err.message}`);
+      } else {
+        pushLog(`ZIP error: ${err.message}`);
+      }
+    });
+
+    archive.pipe(res);
+    for (const sound of sounds) {
+      const fullPath = path.join(gameDir, sound.relPath);
+      archive.file(fullPath, { name: sound.relPath.replace(/\\/g, '/') });
+    }
+    archive.finalize();
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -262,6 +355,7 @@ app.post('/api/apply', async (req, res) => {
     await writeProperties(game);
     let startInfo = null;
     if (runStart) {
+      await stopStartJs('apply');
       startInfo = startStartJs();
     }
 
@@ -285,5 +379,6 @@ loadConfigFromDisk().finally(() => {
   app.listen(PORT, () => {
     console.log(`SFX HotSwap server running on http://localhost:${PORT}`);
     console.log(`Resources: ${state.resourcesRoot}`);
+    pushLog('Server nastartován');
   });
 });
