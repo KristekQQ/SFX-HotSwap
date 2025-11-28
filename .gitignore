@@ -1,0 +1,19 @@
+# Node and build artifacts
+node_modules
+npm-debug.log*
+pnpm-lock.yaml
+yarn.lock
+package-lock.json
+.npmrc
+
+# Local config and uploads
+config.local.json
+uploads
+
+# IDE/editor
+.idea
+.vscode
+
+# OS
+.DS_Store
+Thumbs.db

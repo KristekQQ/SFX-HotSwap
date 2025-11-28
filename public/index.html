@@ -185,6 +185,76 @@
       margin-top: 6px;
       font-size: 12px;
     }
+    .player {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 8px;
+      padding: 8px;
+      border-radius: 10px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid var(--border);
+      flex-wrap: nowrap;
+      min-width: 0;
+    }
+    .player button {
+      padding: 6px 10px;
+      font-size: 12px;
+      border-radius: 8px;
+      flex: 0 0 auto;
+    }
+    .player .time {
+      font-size: 12px;
+      color: var(--muted);
+      width: 84px;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+      flex: 0 0 84px;
+    }
+    .player .seek {
+      flex: 1 1 120px;
+      min-width: 80px;
+    }
+    .player .volume {
+      width: 70px;
+      flex: 0 0 70px;
+    }
+    .player input[type="range"] {
+      margin: 0;
+      appearance: none;
+      -webkit-appearance: none;
+      background: transparent;
+      cursor: pointer;
+      height: 24px;
+      touch-action: none;
+    }
+    .player input[type="range"]::-webkit-slider-runnable-track {
+      height: 4px;
+      background: rgba(255,255,255,0.25);
+      border-radius: 999px;
+    }
+    .player input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: var(--accent-2);
+      margin-top: -4px;
+      border: 1px solid rgba(0,0,0,0.2);
+    }
+    .player input[type="range"]::-moz-range-track {
+      height: 4px;
+      background: rgba(255,255,255,0.25);
+      border-radius: 999px;
+    }
+    .player input[type="range"]::-moz-range-thumb {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: var(--accent-2);
+      border: 1px solid rgba(0,0,0,0.2);
+    }
     .badge {
       display: inline-flex;
       align-items: center;
@@ -369,9 +439,13 @@
     const clearPairsBtn = document.getElementById('clearPairs');
     const liveLog = document.getElementById('liveLog');
     let logStream;
+    let activeAudio = null;
 
     init();
 
+    /**
+     * Boot UI: load config, games, bind handlers, start logs.
+     */
     async function init() {
       await loadConfig();
       await fetchGames();
@@ -380,6 +454,9 @@
       startLogStream();
     }
 
+    /**
+     * Wire up UI controls and drag/drop.
+     */
     function bindEvents() {
       savePathBtn.addEventListener('click', savePath);
       reloadGamesBtn.addEventListener('click', fetchGames);
@@ -403,6 +480,9 @@
       clearPairsBtn.addEventListener('click', () => { state.pairs.clear(); render(); });
     }
 
+    /**
+     * Load server config (paths) and reflect in UI.
+     */
     async function loadConfig() {
       const res = await fetch('/api/config');
       const data = await res.json();
@@ -411,6 +491,9 @@
       pathInfo.textContent = data.resourcesRoot;
     }
 
+    /**
+     * Persist new resources path.
+     */
     async function savePath() {
       const newPath = pathInput.value.trim();
       if (!newPath) return;
@@ -431,6 +514,9 @@
       }
     }
 
+    /**
+     * Load game list and auto-select first.
+     */
     async function fetchGames() {
       setLog('Načítám hry...');
       const res = await fetch('/api/games');
@@ -453,6 +539,9 @@
       setLog('Hry načteny.');
     }
 
+    /**
+     * Load log backlog for start.js.
+     */
     async function loadLogs() {
       try {
         const res = await fetch('/api/logs');
@@ -461,6 +550,9 @@
       } catch {}
     }
 
+    /**
+     * Open SSE stream for live logs.
+     */
     function startLogStream() {
       if (logStream) logStream.close();
       logStream = new EventSource('/api/logs/stream');
@@ -469,6 +561,9 @@
       };
     }
 
+    /**
+     * Load sounds for selected game and reset invalid pairs.
+     */
     async function loadSounds() {
       if (!state.selectedGame) return;
       setLog('Načítám zvuky...');
@@ -484,6 +579,9 @@
       setLog('Zvuky načteny.');
     }
 
+    /**
+     * Drop pairs that no longer match loaded sounds.
+     */
     function filterPairs() {
       const valid = new Map();
       for (const [target, repl] of state.pairs.entries()) {
@@ -494,6 +592,9 @@
       state.pairs = valid;
     }
 
+    /**
+     * Upload files to server and add to replacement list.
+     */
     async function handleFiles(fileList) {
       if (!fileList || !fileList.length) return;
       const form = new FormData();
@@ -513,6 +614,9 @@
       fileInput.value = '';
     }
 
+    /**
+     * Pair replacements to sounds by basename (pre-dot).
+     */
     function autoPair() {
       const nameToTarget = new Map();
       state.sounds.forEach(s => {
@@ -527,12 +631,18 @@
       }
     }
 
+    /**
+     * Render summary and both lists.
+     */
     function render() {
       renderSummary();
       renderSounds();
       renderReplacements();
     }
 
+    /**
+     * Render paired/total summary chip.
+     */
     function renderSummary() {
       const paired = state.pairs.size;
       const total = state.sounds.length;
@@ -541,6 +651,9 @@
         : 'Žádná hra vybrána';
     }
 
+    /**
+     * Render original sounds list with drop targets and player.
+     */
     function renderSounds() {
       soundList.innerHTML = '';
       state.sounds.forEach(sound => {
@@ -594,10 +707,15 @@
         item.appendChild(title);
         item.appendChild(meta);
         item.appendChild(pairRow);
+        const player = createPlayer(`/api/games/${encodeURIComponent(state.selectedGame)}/audio?file=${encodeURIComponent(sound.relPath)}`);
+        item.appendChild(player);
         soundList.appendChild(item);
       });
     }
 
+    /**
+     * Render uploaded replacements with player and drag source.
+     */
     function renderReplacements() {
       replacementList.innerHTML = '';
       const used = new Set(state.pairs.values());
@@ -607,6 +725,10 @@
         if (used.has(repl.id)) item.classList.add('paired');
         item.draggable = true;
         item.addEventListener('dragstart', e => {
+          if (e.target.closest('.no-drag')) {
+            e.preventDefault();
+            return;
+          }
           e.dataTransfer.setData('text/replacement', repl.id);
         });
 
@@ -625,10 +747,15 @@
         item.appendChild(title);
         item.appendChild(meta);
         item.appendChild(chip);
+        const player = createPlayer(`/api/uploads/${repl.id}/audio`);
+        item.appendChild(player);
         replacementList.appendChild(item);
       });
     }
 
+    /**
+     * Apply mapped replacements, optionally restart start.js.
+     */
     async function applyChanges() {
       if (!state.selectedGame) {
         setLog('Vyber hru.');
@@ -663,6 +790,9 @@
       }
     }
 
+    /**
+     * Download all game sounds as zip.
+     */
     function downloadZip() {
       if (!state.selectedGame) {
         setLog('Vyber hru.');
@@ -673,11 +803,17 @@
       window.open(url, '_blank');
     }
 
+    /**
+     * Basename up to first dot.
+     */
     function stripExt(name) {
       const idx = name.indexOf('.');
       return idx === -1 ? name : name.slice(0, idx);
     }
 
+    /**
+     * Human readable bytes.
+     */
     function formatSize(bytes) {
       if (!bytes && bytes !== 0) return '';
       const units = ['B', 'KB', 'MB', 'GB'];
@@ -690,15 +826,176 @@
       return `${size.toFixed(1)} ${units[idx]}`;
     }
 
+    /**
+     * Update status text under actions.
+     */
     function setLog(msg) {
       logBox.textContent = msg;
     }
 
+    /**
+     * Create inline audio player (play/pause, seek, volume, stop).
+     */
+    function createPlayer(url) {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'player no-drag';
+      const audio = new Audio(url);
+      audio.preload = 'none';
+      audio.volume = 1;
+
+      function toggleParentDrag(el, enable) {
+        const parent = el.closest('.replacement');
+        if (parent) parent.draggable = enable;
+      }
+
+      const playBtn = document.createElement('button');
+      playBtn.textContent = '▶︎';
+      playBtn.addEventListener('click', () => togglePlay(audio, playBtn));
+      playBtn.addEventListener('pointerdown', e => e.stopPropagation());
+      playBtn.addEventListener('mousedown', e => e.stopPropagation());
+
+      const range = document.createElement('input');
+      range.type = 'range';
+      range.min = 0;
+      range.max = 0;
+      range.step = 0.05;
+      range.value = 0;
+      range.className = 'seek';
+      range.addEventListener('input', () => {
+        audio.currentTime = Number(range.value);
+        updateTimeLabel(timeLabel, audio.currentTime, audio.duration);
+      });
+      const stopScrub = () => { range._scrubbing = false; };
+      ['pointerdown', 'mousedown', 'touchstart'].forEach(evt => {
+        range.addEventListener(evt, e => { e.stopPropagation(); range._scrubbing = true; toggleParentDrag(range, false); });
+      });
+      ['pointerup', 'pointercancel', 'mouseup', 'mouseleave', 'touchend'].forEach(evt => {
+        range.addEventListener(evt, e => { e.stopPropagation(); stopScrub(); toggleParentDrag(range, true); });
+      });
+      ['touchmove', 'pointermove'].forEach(evt => {
+        range.addEventListener(evt, e => { e.stopPropagation(); });
+      });
+
+      const volume = document.createElement('input');
+      volume.type = 'range';
+      volume.min = 0;
+      volume.max = 1;
+      volume.step = 0.01;
+      volume.value = 1;
+      volume.className = 'volume';
+      volume.title = 'Hlasitost';
+      volume.addEventListener('input', () => {
+        audio.volume = Number(volume.value);
+      });
+      ['pointerdown', 'mousedown', 'touchstart', 'touchmove', 'pointermove'].forEach(evt => {
+        volume.addEventListener(evt, e => { e.stopPropagation(); toggleParentDrag(volume, false); });
+      });
+      ['pointerup', 'pointercancel', 'mouseup', 'mouseleave', 'touchend', 'touchcancel', 'pointerleave'].forEach(evt => {
+        volume.addEventListener(evt, e => { e.stopPropagation(); toggleParentDrag(volume, true); });
+      });
+
+      const timeLabel = document.createElement('div');
+      timeLabel.className = 'time';
+      timeLabel.textContent = '0:00 / 0:00';
+
+      const stopBtn = document.createElement('button');
+      stopBtn.textContent = '⏹';
+      stopBtn.addEventListener('click', () => {
+        stopAudio(audio, playBtn, range, timeLabel);
+      });
+      stopBtn.addEventListener('pointerdown', e => e.stopPropagation());
+      stopBtn.addEventListener('mousedown', e => e.stopPropagation());
+      ['pointerup', 'touchend', 'mouseup', 'touchcancel', 'pointercancel'].forEach(evt => {
+        stopBtn.addEventListener(evt, e => { e.stopPropagation(); toggleParentDrag(stopBtn, true); });
+      });
+      ['pointerdown', 'mousedown', 'touchstart'].forEach(evt => {
+        stopBtn.addEventListener(evt, e => { e.stopPropagation(); toggleParentDrag(stopBtn, false); });
+      });
+
+      audio.addEventListener('loadedmetadata', () => {
+        range.max = audio.duration || 0;
+        updateTimeLabel(timeLabel, audio.currentTime, audio.duration);
+      });
+      audio.addEventListener('timeupdate', () => {
+        if (!range._scrubbing) {
+          range.value = audio.currentTime;
+        }
+        updateTimeLabel(timeLabel, audio.currentTime, audio.duration);
+      });
+      audio.addEventListener('ended', () => {
+        stopAudio(audio, playBtn, range, timeLabel);
+        range._scrubbing = false;
+      });
+
+      wrapper.appendChild(playBtn);
+      wrapper.appendChild(range);
+      wrapper.appendChild(volume);
+      wrapper.appendChild(timeLabel);
+      wrapper.appendChild(stopBtn);
+      return wrapper;
+    }
+
+    /**
+     * Play/pause audio, ensuring only one active at a time.
+     */
+    function togglePlay(audio, btn) {
+      if (activeAudio && activeAudio !== audio) {
+        activeAudio.pause();
+        activeAudio.currentTime = 0;
+        if (activeAudio._btn) activeAudio._btn.textContent = '▶︎';
+      }
+      activeAudio = audio;
+      audio._btn = btn;
+      if (audio.paused) {
+        audio.play();
+        btn.textContent = '⏸';
+      } else {
+        audio.pause();
+        btn.textContent = '▶︎';
+      }
+    }
+
+    /**
+     * Stop and reset audio UI.
+     */
+    function stopAudio(audio, btn, range, label) {
+      audio.pause();
+      audio.currentTime = 0;
+      if (btn) btn.textContent = '▶︎';
+      if (range) range.value = 0;
+      if (range) range._scrubbing = false;
+      if (label) updateTimeLabel(label, 0, audio.duration || 0);
+      if (activeAudio === audio) activeAudio = null;
+    }
+
+    /**
+     * Render time label.
+     */
+    function updateTimeLabel(el, current, duration) {
+      el.textContent = `${formatTime(current)} / ${formatTime(duration)}`;
+    }
+
+    /**
+     * Format seconds into m:ss.
+     */
+    function formatTime(sec) {
+      if (!isFinite(sec)) return '0:00';
+      const m = Math.floor(sec / 60);
+      const s = Math.floor(sec % 60).toString().padStart(2, '0');
+      return `${m}:${s}`;
+    }
+
+    /**
+     * Render full log history.
+     */
     function renderLog(lines) {
       liveLog.textContent = lines.join('\n');
       liveLog.scrollTop = liveLog.scrollHeight;
     }
 
+    /**
+     * Append live log line.
+     */
     function appendLogLine(line) {
       liveLog.textContent += (liveLog.textContent ? '\n' : '') + line;
       liveLog.scrollTop = liveLog.scrollHeight;
