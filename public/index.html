@@ -1,0 +1,646 @@
+<!doctype html>
+<html lang="cs">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SFX HotSwap</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #f4f1ec;
+      --panel: #0f2533;
+      --card: #142f3f;
+      --accent: #f3a712;
+      --accent-2: #4cc9f0;
+      --muted: #9ab6c5;
+      --border: rgba(255,255,255,0.08);
+      --text: #e8f0f5;
+      --danger: #f87171;
+      --success: #9ae6b4;
+      --shadow: 0 15px 40px rgba(0,0,0,0.22);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: 'Space Grotesk', 'Segoe UI', sans-serif;
+      background: radial-gradient(circle at 20% 20%, #fce4b5, #f4f1ec 30%), linear-gradient(135deg, #c5f6fa 0%, #f4f1ec 80%);
+      color: var(--text);
+    }
+    .page {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 28px 22px 48px;
+    }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      flex-wrap: wrap;
+      gap: 12px;
+      background: linear-gradient(135deg, #0c1f2d, #174159);
+      border-radius: 18px;
+      padding: 18px 20px;
+      box-shadow: var(--shadow);
+    }
+    header h1 {
+      margin: 0;
+      font-size: 26px;
+      letter-spacing: 0.02em;
+    }
+    header p {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .pill {
+      background: rgba(255,255,255,0.08);
+      border: 1px solid var(--border);
+      padding: 8px 12px;
+      border-radius: 999px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .panel {
+      margin-top: 16px;
+      background: var(--panel);
+      border-radius: 18px;
+      padding: 16px;
+      box-shadow: var(--shadow);
+      border: 1px solid var(--border);
+    }
+    .config {
+      display: grid;
+      grid-template-columns: 2fr 1fr;
+      gap: 10px;
+      align-items: center;
+    }
+    label {
+      display: block;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+    input, select {
+      width: 100%;
+      padding: 12px 14px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: var(--card);
+      color: var(--text);
+      font-size: 14px;
+      outline: none;
+      transition: border-color 120ms ease;
+    }
+    input:focus, select:focus {
+      border-color: var(--accent);
+    }
+    button {
+      border: none;
+      border-radius: 12px;
+      padding: 12px 16px;
+      background: var(--accent);
+      color: #0f172a;
+      font-weight: 700;
+      font-size: 14px;
+      cursor: pointer;
+      transition: transform 120ms ease, box-shadow 120ms ease;
+    }
+    button.secondary {
+      background: rgba(255,255,255,0.1);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    button.danger {
+      background: var(--danger);
+      color: #0f172a;
+    }
+    button:active { transform: translateY(1px); }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 14px;
+      margin-top: 12px;
+    }
+    .card {
+      background: var(--card);
+      border-radius: 16px;
+      padding: 14px;
+      border: 1px solid var(--border);
+    }
+    .card h3 {
+      margin: 0 0 6px;
+      font-size: 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(255,255,255,0.08);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 4px 10px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .workspace {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-top: 12px;
+    }
+    .list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      max-height: 520px;
+      overflow: auto;
+      padding: 4px;
+    }
+    .item {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 10px 12px;
+      background: rgba(255,255,255,0.03);
+      transition: border-color 120ms ease, background 120ms ease, transform 120ms ease;
+    }
+    .item:hover { transform: translateY(-1px); }
+    .item .title {
+      font-weight: 700;
+      margin-bottom: 4px;
+      font-size: 14px;
+    }
+    .item .meta {
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .pair {
+      margin-top: 6px;
+      font-size: 12px;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 8px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.08);
+      border: 1px solid var(--border);
+      font-size: 12px;
+    }
+    .badge.good { background: rgba(74, 222, 128, 0.12); color: #c5f8d4; }
+    .badge.warn { background: rgba(248, 113, 113, 0.12); color: #fecdd3; }
+    .dropzone {
+      border: 2px dashed rgba(255,255,255,0.2);
+      border-radius: 14px;
+      padding: 20px;
+      text-align: center;
+      color: var(--muted);
+      transition: border-color 150ms ease, background 150ms ease;
+    }
+    .dropzone.dragover {
+      border-color: var(--accent-2);
+      background: rgba(76, 201, 240, 0.08);
+      color: #d7f3ff;
+    }
+    .actions {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-top: 14px;
+    }
+    .log {
+      margin-top: 10px;
+      font-size: 13px;
+      color: var(--muted);
+      min-height: 20px;
+    }
+    .checkbox {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .replacement.paired {
+      border-color: rgba(74, 222, 128, 0.5);
+    }
+    .sound.unpaired {
+      border-color: rgba(248, 113, 113, 0.5);
+    }
+    .sound.drop-target {
+      border-color: var(--accent-2);
+      background: rgba(76, 201, 240, 0.08);
+    }
+    .small-button {
+      background: rgba(255,255,255,0.1);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 6px 8px;
+      font-size: 12px;
+      border-radius: 10px;
+      cursor: pointer;
+    }
+    @media (max-width: 840px) {
+      .workspace { grid-template-columns: 1fr; }
+      .list { max-height: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header>
+      <div>
+        <h1>SFX HotSwap</h1>
+        <p>Vyber hru, nahraj nové zvuky a přetáhni je na původní soubory.</p>
+      </div>
+      <div class="pill" id="pathInfo"></div>
+    </header>
+
+    <div class="panel">
+      <div class="config">
+        <div>
+          <label for="pathInput">Cesta k resources-games</label>
+          <input id="pathInput" type="text" placeholder="/mnt/.../resources-games">
+        </div>
+        <div style="align-self:flex-end; display:flex; gap:8px;">
+          <button id="savePath">Uložit cestu</button>
+          <button class="secondary" id="reloadGames">Načíst hry</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="grid">
+        <div class="card">
+          <h3>Hra</h3>
+          <select id="gameSelect"></select>
+        </div>
+        <div class="card">
+          <h3>Stav</h3>
+          <div class="tag" id="summary">Žádná hra vybrána</div>
+        </div>
+        <div class="card">
+          <h3>Rychlé akce</h3>
+          <div class="actions">
+            <button id="autoPair">Párovat podle názvu</button>
+            <label class="checkbox"><input type="checkbox" id="runStart" checked> spustit start.js po výměně</label>
+          </div>
+        </div>
+      </div>
+
+      <div class="workspace">
+        <div class="card">
+          <h3>Originální zvuky</h3>
+          <div class="list" id="soundList"></div>
+        </div>
+        <div class="card">
+          <h3>Nové zvuky</h3>
+          <div class="dropzone" id="dropzone">
+            Přetáhni sem soubory nebo
+            <button class="secondary" id="pickFiles" style="margin-left:8px;">Vyber soubory</button>
+            <input type="file" id="fileInput" accept=".ogg,.mp3,.wav,.flac,.aac,.m4a" multiple hidden>
+          </div>
+          <div class="list" id="replacementList"></div>
+        </div>
+      </div>
+
+      <div class="actions" style="margin-top:18px;">
+        <button class="danger" id="clearPairs">Odpojit párování</button>
+        <button id="apply">Vyměnit zvuky</button>
+        <div class="log" id="log"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const state = {
+      resourcesRoot: '',
+      games: [],
+      selectedGame: '',
+      sounds: [],
+      replacements: [],
+      pairs: new Map()
+    };
+
+    const pathInfo = document.getElementById('pathInfo');
+    const pathInput = document.getElementById('pathInput');
+    const savePathBtn = document.getElementById('savePath');
+    const reloadGamesBtn = document.getElementById('reloadGames');
+    const gameSelect = document.getElementById('gameSelect');
+    const soundList = document.getElementById('soundList');
+    const replacementList = document.getElementById('replacementList');
+    const summary = document.getElementById('summary');
+    const dropzone = document.getElementById('dropzone');
+    const fileInput = document.getElementById('fileInput');
+    const pickFiles = document.getElementById('pickFiles');
+    const autoPairBtn = document.getElementById('autoPair');
+    const applyBtn = document.getElementById('apply');
+    const logBox = document.getElementById('log');
+    const runStartCheckbox = document.getElementById('runStart');
+    const clearPairsBtn = document.getElementById('clearPairs');
+
+    init();
+
+    async function init() {
+      await loadConfig();
+      await fetchGames();
+      bindEvents();
+    }
+
+    function bindEvents() {
+      savePathBtn.addEventListener('click', savePath);
+      reloadGamesBtn.addEventListener('click', fetchGames);
+      gameSelect.addEventListener('change', () => {
+        state.selectedGame = gameSelect.value;
+        state.pairs.clear();
+        loadSounds();
+      });
+      pickFiles.addEventListener('click', () => fileInput.click());
+      fileInput.addEventListener('change', () => handleFiles(fileInput.files));
+      dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('dragover'); });
+      dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
+      dropzone.addEventListener('drop', e => {
+        e.preventDefault();
+        dropzone.classList.remove('dragover');
+        handleFiles(e.dataTransfer.files);
+      });
+      autoPairBtn.addEventListener('click', () => { autoPair(); render(); });
+      applyBtn.addEventListener('click', applyChanges);
+      clearPairsBtn.addEventListener('click', () => { state.pairs.clear(); render(); });
+    }
+
+    async function loadConfig() {
+      const res = await fetch('/api/config');
+      const data = await res.json();
+      state.resourcesRoot = data.resourcesRoot;
+      pathInput.value = data.resourcesRoot;
+      pathInfo.textContent = data.resourcesRoot;
+    }
+
+    async function savePath() {
+      const newPath = pathInput.value.trim();
+      if (!newPath) return;
+      setLog('Ukládám novou cestu...');
+      const res = await fetch('/api/config/path', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ resourcesRoot: newPath })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        state.resourcesRoot = data.resourcesRoot;
+        pathInfo.textContent = data.resourcesRoot;
+        setLog('Cesta uložena.');
+        fetchGames();
+      } else {
+        setLog(data.error || 'Nepodařilo se uložit cestu');
+      }
+    }
+
+    async function fetchGames() {
+      setLog('Načítám hry...');
+      const res = await fetch('/api/games');
+      const data = await res.json();
+      state.games = data.games || [];
+      gameSelect.innerHTML = '';
+      if (!state.games.length) {
+        gameSelect.innerHTML = '<option>Žádné složky nenalezeny</option>';
+        return;
+      }
+      state.games.forEach((g, idx) => {
+        const opt = document.createElement('option');
+        opt.value = g;
+        opt.textContent = g;
+        if (idx === 0) opt.selected = true;
+        gameSelect.appendChild(opt);
+      });
+      state.selectedGame = gameSelect.value;
+      await loadSounds();
+      setLog('Hry načteny.');
+    }
+
+    async function loadSounds() {
+      if (!state.selectedGame) return;
+      setLog('Načítám zvuky...');
+      const res = await fetch(`/api/games/${encodeURIComponent(state.selectedGame)}/sounds`);
+      const data = await res.json();
+      if (!res.ok) {
+        setLog(data.error || 'Nepodařilo se načíst zvuky');
+        return;
+      }
+      state.sounds = data.sounds || [];
+      filterPairs();
+      render();
+      setLog('Zvuky načteny.');
+    }
+
+    function filterPairs() {
+      const valid = new Map();
+      for (const [target, repl] of state.pairs.entries()) {
+        if (state.sounds.find(s => s.relPath === target)) {
+          valid.set(target, repl);
+        }
+      }
+      state.pairs = valid;
+    }
+
+    async function handleFiles(fileList) {
+      if (!fileList || !fileList.length) return;
+      const form = new FormData();
+      for (const file of fileList) form.append('files', file);
+      setLog('Nahrávám soubory...');
+      const res = await fetch('/api/uploads', { method: 'POST', body: form });
+      const data = await res.json();
+      if (!res.ok) {
+        setLog(data.error || 'Nahrávání selhalo');
+        return;
+      }
+      const newOnes = data.uploaded || [];
+      state.replacements.push(...newOnes);
+      autoPair();
+      render();
+      setLog(`Nahráno ${newOnes.length} souborů`);
+      fileInput.value = '';
+    }
+
+    function autoPair() {
+      const nameToTarget = new Map();
+      state.sounds.forEach(s => {
+        nameToTarget.set(stripExt(s.name).toLowerCase(), s.relPath);
+      });
+      for (const repl of state.replacements) {
+        const base = stripExt(repl.originalName).toLowerCase();
+        const target = nameToTarget.get(base);
+        if (target && !state.pairs.has(target)) {
+          state.pairs.set(target, repl.id);
+        }
+      }
+    }
+
+    function render() {
+      renderSummary();
+      renderSounds();
+      renderReplacements();
+    }
+
+    function renderSummary() {
+      const paired = state.pairs.size;
+      const total = state.sounds.length;
+      summary.textContent = total
+        ? `${paired}/${total} spárováno`
+        : 'Žádná hra vybrána';
+    }
+
+    function renderSounds() {
+      soundList.innerHTML = '';
+      state.sounds.forEach(sound => {
+        const pairedId = state.pairs.get(sound.relPath);
+        const item = document.createElement('div');
+        item.className = 'item sound';
+        if (!pairedId) item.classList.add('unpaired');
+        item.dataset.target = sound.relPath;
+        item.addEventListener('dragover', e => { e.preventDefault(); item.classList.add('drop-target'); });
+        item.addEventListener('dragleave', () => item.classList.remove('drop-target'));
+        item.addEventListener('drop', e => {
+          e.preventDefault();
+          item.classList.remove('drop-target');
+          const replId = e.dataTransfer.getData('text/replacement');
+          if (replId) {
+            state.pairs.set(sound.relPath, replId);
+            render();
+          }
+        });
+
+        const title = document.createElement('div');
+        title.className = 'title';
+        title.textContent = sound.name;
+
+        const meta = document.createElement('div');
+        meta.className = 'meta';
+        meta.textContent = `${sound.relPath} · ${formatSize(sound.size)}`;
+
+        const pairRow = document.createElement('div');
+        pairRow.className = 'pair';
+        if (pairedId) {
+          const replacement = state.replacements.find(r => r.id === pairedId);
+          const badge = document.createElement('span');
+          badge.className = 'badge good';
+          badge.textContent = `Přiřazeno: ${replacement ? replacement.originalName : pairedId}`;
+          pairRow.appendChild(badge);
+
+          const btn = document.createElement('button');
+          btn.textContent = 'Odebrat';
+          btn.className = 'small-button';
+          btn.style.marginLeft = '8px';
+          btn.addEventListener('click', () => { state.pairs.delete(sound.relPath); render(); });
+          pairRow.appendChild(btn);
+        } else {
+          const badge = document.createElement('span');
+          badge.className = 'badge warn';
+          badge.textContent = 'Nepárováno';
+          pairRow.appendChild(badge);
+        }
+
+        item.appendChild(title);
+        item.appendChild(meta);
+        item.appendChild(pairRow);
+        soundList.appendChild(item);
+      });
+    }
+
+    function renderReplacements() {
+      replacementList.innerHTML = '';
+      const used = new Set(state.pairs.values());
+      state.replacements.forEach(repl => {
+        const item = document.createElement('div');
+        item.className = 'item replacement';
+        if (used.has(repl.id)) item.classList.add('paired');
+        item.draggable = true;
+        item.addEventListener('dragstart', e => {
+          e.dataTransfer.setData('text/replacement', repl.id);
+        });
+
+        const title = document.createElement('div');
+        title.className = 'title';
+        title.textContent = repl.originalName;
+
+        const meta = document.createElement('div');
+        meta.className = 'meta';
+        meta.textContent = formatSize(repl.size);
+
+        const chip = document.createElement('span');
+        chip.className = 'badge';
+        chip.textContent = used.has(repl.id) ? 'Spárováno' : 'K dispozici';
+
+        item.appendChild(title);
+        item.appendChild(meta);
+        item.appendChild(chip);
+        replacementList.appendChild(item);
+      });
+    }
+
+    async function applyChanges() {
+      if (!state.selectedGame) {
+        setLog('Vyber hru.');
+        return;
+      }
+      const mappings = Array.from(state.pairs.entries()).map(([target, replacementId]) => ({ target, replacementId }));
+      if (!mappings.length) {
+        setLog('Nemáš žádné párování.');
+        return;
+      }
+      setLog('Vyměňuji zvuky...');
+      const res = await fetch('/api/apply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          game: state.selectedGame,
+          mappings,
+          runStart: runStartCheckbox.checked
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        let startNote = '';
+        if (data.startInfo) {
+          startNote = data.startInfo.started
+            ? `, start.js PID ${data.startInfo.pid}`
+            : `, start.js nebyl spuštěn: ${data.startInfo.reason}`;
+        }
+        setLog(`Hotovo. Nahrazeno ${data.replaced.length} souborů${startNote}.`);
+      } else {
+        setLog(data.error || 'Výměna selhala');
+      }
+    }
+
+    function stripExt(name) {
+      return name.replace(/\.[^.]+$/, '');
+    }
+
+    function formatSize(bytes) {
+      if (!bytes && bytes !== 0) return '';
+      const units = ['B', 'KB', 'MB', 'GB'];
+      let size = bytes;
+      let idx = 0;
+      while (size > 1000 && idx < units.length - 1) {
+        size /= 1000;
+        idx++;
+      }
+      return `${size.toFixed(1)} ${units[idx]}`;
+    }
+
+    function setLog(msg) {
+      logBox.textContent = msg;
+    }
+  </script>
+</body>
+</html>

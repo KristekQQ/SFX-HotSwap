@@ -1,0 +1,25 @@
+{
+  "name": "sfx-hotswap",
+  "version": "1.0.0",
+  "description": "Simple UI to hot-swap SFX files for wcgames7 builds",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KristekQQ/SFX-HotSwap.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/KristekQQ/SFX-HotSwap/issues"
+  },
+  "homepage": "https://github.com/KristekQQ/SFX-HotSwap#readme",
+  "dependencies": {
+    "express": "^5.1.0",
+    "multer": "^2.0.2"
+  }
+}
