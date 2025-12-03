@@ -219,6 +219,36 @@
       width: 70px;
       flex: 0 0 70px;
     }
+    .changed-card {
+      background: var(--card);
+      border-radius: 16px;
+      padding: 14px;
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow);
+    }
+    .changed-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .changed-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,0.04);
+    }
+    .changed-row .name {
+      flex: 1;
+      font-weight: 700;
+    }
+    .changed-row .files {
+      font-size: 12px;
+      color: var(--muted);
+    }
     .player input[type="range"] {
       margin: 0;
       appearance: none;
@@ -332,6 +362,11 @@
       border-radius: 10px;
       cursor: pointer;
     }
+    .remove-btn {
+      background: #ef4444;
+      border: 1px solid rgba(0,0,0,0.15);
+      color: #0f172a;
+    }
     @media (max-width: 840px) {
       .workspace { grid-template-columns: 1fr; }
       .list { max-height: none; }
@@ -399,8 +434,21 @@
 
       <div class="actions" style="margin-top:18px;">
         <button class="danger" id="clearPairs">Odpojit párování</button>
+        <button class="secondary" id="rollback">Git rollback (resources-games)</button>
         <button id="apply">Vyměnit zvuky</button>
         <div class="log" id="log"></div>
+      </div>
+
+      <div class="changed-card" style="margin-top:12px;">
+        <div style="display:flex; align-items:center; gap:10px; justify-content:space-between;">
+          <h3 style="margin:0;">Změněné hry (git)</h3>
+          <div style="display:flex; gap:8px; align-items:center;">
+            <button class="secondary" id="refreshChanges">Znovu načíst</button>
+            <button id="buildChanged">Zbuildit vybrané</button>
+          </div>
+        </div>
+        <div id="changedInfo" class="meta" style="margin-top:6px; color: var(--muted); font-size:13px;"></div>
+        <div class="changed-list" id="changedList"></div>
       </div>
 
       <div class="card" style="margin-top:14px;">
@@ -417,7 +465,9 @@
       selectedGame: '',
       sounds: [],
       replacements: [],
-      pairs: new Map()
+      pairs: new Map(),
+      changedGames: [],
+      selectedChanged: new Set()
     };
 
     const pathInfo = document.getElementById('pathInfo');
@@ -434,12 +484,18 @@
     const autoPairBtn = document.getElementById('autoPair');
     const downloadZipBtn = document.getElementById('downloadZip');
     const applyBtn = document.getElementById('apply');
+    const rollbackBtn = document.getElementById('rollback');
     const logBox = document.getElementById('log');
     const runStartCheckbox = document.getElementById('runStart');
     const clearPairsBtn = document.getElementById('clearPairs');
     const liveLog = document.getElementById('liveLog');
+    const changedList = document.getElementById('changedList');
+    const changedInfo = document.getElementById('changedInfo');
+    const refreshChangesBtn = document.getElementById('refreshChanges');
+    const buildChangedBtn = document.getElementById('buildChanged');
     let logStream;
     let activeAudio = null;
+    let changeInterval = null;
 
     init();
 
@@ -452,6 +508,9 @@
       bindEvents();
       await loadLogs();
       startLogStream();
+      await fetchChanges();
+      if (changeInterval) clearInterval(changeInterval);
+      changeInterval = setInterval(fetchChanges, 10000);
     }
 
     /**
@@ -477,7 +536,10 @@
       autoPairBtn.addEventListener('click', () => { autoPair(); render(); });
       downloadZipBtn.addEventListener('click', downloadZip);
       applyBtn.addEventListener('click', applyChanges);
+      rollbackBtn.addEventListener('click', rollbackChanges);
       clearPairsBtn.addEventListener('click', () => { state.pairs.clear(); render(); });
+      refreshChangesBtn.addEventListener('click', fetchChanges);
+      buildChangedBtn.addEventListener('click', buildSelectedChanged);
     }
 
     /**
@@ -577,6 +639,7 @@
       filterPairs();
       render();
       setLog('Zvuky načteny.');
+      fetchChanges();
     }
 
     /**
@@ -612,6 +675,7 @@
       render();
       setLog(`Nahráno ${newOnes.length} souborů`);
       fileInput.value = '';
+      fetchChanges();
     }
 
     /**
@@ -638,6 +702,7 @@
       renderSummary();
       renderSounds();
       renderReplacements();
+      renderChangedGames();
     }
 
     /**
@@ -744,13 +809,104 @@
         chip.className = 'badge';
         chip.textContent = used.has(repl.id) ? 'Spárováno' : 'K dispozici';
 
+        const removeBtn = document.createElement('button');
+        removeBtn.textContent = '✕';
+        removeBtn.className = 'small-button remove-btn';
+        removeBtn.style.marginLeft = '8px';
+        removeBtn.addEventListener('click', () => {
+          state.replacements = state.replacements.filter(r => r.id !== repl.id);
+          // drop any pairs pointing to this replacement
+          state.pairs = new Map(Array.from(state.pairs.entries()).filter(([, rid]) => rid !== repl.id));
+          render();
+        });
+
         item.appendChild(title);
         item.appendChild(meta);
         item.appendChild(chip);
+        item.appendChild(removeBtn);
         const player = createPlayer(`/api/uploads/${repl.id}/audio`);
         item.appendChild(player);
         replacementList.appendChild(item);
       });
+    }
+
+    /**
+     * Fetch changed games from git status.
+     */
+    async function fetchChanges() {
+      try {
+        const res = await fetch('/api/changes');
+        const data = await res.json();
+        state.changedGames = data.games || [];
+        // automaticky zaškrtnout všechny zjištěné změny
+        state.selectedChanged = new Set(state.changedGames.map(g => g.name));
+        renderChangedGames();
+      } catch (err) {
+        changedInfo.textContent = 'Nepodařilo se načíst git status.';
+      }
+    }
+
+    /**
+     * Render changed games list with checkboxes.
+     */
+    function renderChangedGames() {
+      changedList.innerHTML = '';
+      if (!state.changedGames.length) {
+        changedInfo.textContent = 'Žádné změny ve složce resources-games (git).';
+        return;
+      }
+      changedInfo.textContent = `Změněné hry: ${state.changedGames.length}`;
+      state.changedGames.forEach(game => {
+        const row = document.createElement('div');
+        row.className = 'changed-row';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = state.selectedChanged.has(game.name);
+        cb.addEventListener('change', () => {
+          if (cb.checked) state.selectedChanged.add(game.name);
+          else state.selectedChanged.delete(game.name);
+        });
+        const name = document.createElement('div');
+        name.className = 'name';
+        name.textContent = game.name;
+        const files = document.createElement('div');
+        files.className = 'files';
+        files.textContent = `${game.files} změn`;
+        row.appendChild(cb);
+        row.appendChild(name);
+        row.appendChild(files);
+        changedList.appendChild(row);
+      });
+    }
+
+    /**
+     * Build selected changed games and optionally restart start.js.
+     */
+    async function buildSelectedChanged() {
+      const selected = Array.from(state.selectedChanged);
+      if (!selected.length) {
+        setLog('Vyber aspoň jednu hru pro build.');
+        return;
+      }
+      setLog(`Build & start pro: ${selected.join(', ')}`);
+      const res = await fetch('/api/build-run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ games: selected, runStart: runStartCheckbox.checked })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        let startNote = '';
+        if (data.startInfo) {
+          startNote = data.startInfo.started
+            ? `, start.js PID ${data.startInfo.pid}`
+            : `, start.js nebyl spuštěn: ${data.startInfo.reason}`;
+        }
+        setLog(`Build list nastaven${startNote || ''}.`);
+      } else {
+        setLog(data.error || 'Build-run selhal');
+      }
+      fetchChanges();
     }
 
     /**
@@ -784,9 +940,41 @@
             ? `, start.js PID ${data.startInfo.pid}`
             : `, start.js nebyl spuštěn: ${data.startInfo.reason}`;
         }
-        setLog(`Hotovo. Nahrazeno ${data.replaced.length} souborů${startNote}.`);
+        const dupInfo = data.duplicates?.length ? `, přeskočeno (shodné): ${data.duplicates.join(', ')}` : '';
+        setLog(`Hotovo. Nahrazeno ${data.replaced.length} souborů${dupInfo}${startNote}.`);
+        fetchChanges();
       } else {
         setLog(data.error || 'Výměna selhala');
+      }
+    }
+
+    /**
+     * Git rollback resources-games/<game> to repo state.
+     */
+    async function rollbackChanges() {
+      if (!state.selectedGame) {
+        setLog('Vyber hru.');
+        return;
+      }
+      setLog('Provádím git rollback...');
+      const res = await fetch('/api/git-rollback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ game: state.selectedGame, runStart: runStartCheckbox.checked })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        let startNote = '';
+        if (data.startInfo) {
+          startNote = data.startInfo.started
+            ? `, start.js PID ${data.startInfo.pid}`
+            : `, start.js nebyl spuštěn: ${data.startInfo.reason}`;
+        }
+        setLog(`Git rollback hotov${startNote}.`);
+        await loadSounds();
+        fetchChanges();
+      } else {
+        setLog(data.error || 'Rollback selhal');
       }
     }
 

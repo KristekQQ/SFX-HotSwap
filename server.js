@@ -11,12 +11,16 @@ const app = express();
 const PORT = process.env.PORT || 4173;
 const DEFAULT_RESOURCES_ROOT = '/mnt/c/Users/Jan Křístek/WebstormProjects/wcgames7/resources-games';
 const CONFIG_FILE = path.join(__dirname, 'config.local.json');
+const BACKUP_ROOT = path.join(__dirname, 'backups');
 const AUDIO_EXTENSIONS = new Set(['.ogg', '.mp3', '.wav', '.flac', '.aac', '.m4a']);
 const LOG_LIMIT = 500;
 
 const uploadDir = path.join(__dirname, 'uploads');
 if (!fssync.existsSync(uploadDir)) {
   fssync.mkdirSync(uploadDir, { recursive: true });
+}
+if (!fssync.existsSync(BACKUP_ROOT)) {
+  fssync.mkdirSync(BACKUP_ROOT, { recursive: true });
 }
 
 const storage = multer.diskStorage({
@@ -45,7 +49,7 @@ const state = {
 };
 
 /**
- * Load persisted config if present.
+ * Boot persisted config if present.
  */
 async function loadConfigFromDisk() {
   try {
@@ -55,7 +59,7 @@ async function loadConfigFromDisk() {
       await updateRoots(saved.resourcesRoot, false);
     }
   } catch {
-    // ignore missing/invalid config
+    // ignore
   }
 }
 
@@ -69,7 +73,7 @@ function saveConfigToDisk() {
 }
 
 /**
- * Push message to in-memory log and SSE clients.
+ * Push message to log buffer and SSE clients.
  * @param {string} message
  */
 function pushLog(message) {
@@ -81,7 +85,6 @@ function pushLog(message) {
   for (const res of logClients) {
     res.write(`data: ${entry}\n\n`);
   }
-  // Also mirror to server stdout for visibility
   console.log(entry);
 }
 
@@ -89,20 +92,15 @@ function pushLog(message) {
  * Update resource root paths and derived wcgames paths.
  * @param {string} resourcesRoot
  * @param {boolean} [persist=true]
- * @returns {Promise<void>}
  */
 async function updateRoots(resourcesRoot, persist = true) {
   const stats = await fs.stat(resourcesRoot);
-  if (!stats.isDirectory()) {
-    throw new Error('resourcesRoot is not a directory');
-  }
+  if (!stats.isDirectory()) throw new Error('resourcesRoot is not a directory');
   state.resourcesRoot = path.resolve(resourcesRoot);
   state.wcgamesRoot = path.resolve(state.resourcesRoot, '..');
   state.propertiesPath = path.join(state.wcgamesRoot, 'properties.build.json');
   state.startScriptPath = path.join(state.wcgamesRoot, 'start.js');
-  if (persist) {
-    await saveConfigToDisk();
-  }
+  if (persist) await saveConfigToDisk();
 }
 
 /**
@@ -127,7 +125,6 @@ async function listSounds(gameName) {
   }
   const sounds = [];
   const queue = [''];
-
   while (queue.length) {
     const relative = queue.pop();
     const absolute = path.join(resolvedGameDir, relative);
@@ -139,12 +136,7 @@ async function listSounds(gameName) {
         queue.push(relPath);
       } else if (AUDIO_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) {
         const { size } = await fs.stat(fullPath);
-        sounds.push({
-          id: relPath,
-          name: entry.name,
-          relPath,
-          size
-        });
+        sounds.push({ id: relPath, name: entry.name, relPath, size });
       }
     }
   }
@@ -197,6 +189,147 @@ function rememberUploads(files) {
 }
 
 /**
+ * Compute md5 hash of a file.
+ * @param {string} filePath
+ * @returns {Promise<string>}
+ */
+async function hashFile(filePath) {
+  const data = await fs.readFile(filePath);
+  const hash = crypto.createHash('md5').update(data).digest('hex');
+  return hash;
+}
+
+/**
+ * Backup current game targets before replacement.
+ * @param {string} gameName
+ * @param {Array<{target:string}>} mappings
+ * @param {string} gameDir
+ * @returns {Promise<number>} number of files backed up
+ */
+async function backupFiles(gameName, mappings, gameDir) {
+  const uniqueTargets = Array.from(new Set(mappings.map(m => m.target).filter(Boolean)));
+  if (!uniqueTargets.length) return 0;
+  const gameBackupDir = path.join(BACKUP_ROOT, gameName);
+  await fs.mkdir(gameBackupDir, { recursive: true });
+  let count = 0;
+  for (const target of uniqueTargets) {
+    const src = path.resolve(gameDir, target);
+    if (!src.startsWith(gameDir)) continue;
+    if (!fssync.existsSync(src)) continue;
+    const dest = path.join(gameBackupDir, target);
+    await fs.mkdir(path.dirname(dest), { recursive: true });
+    await fs.copyFile(src, dest);
+    count++;
+  }
+  if (count) pushLog(`Záloha ${count} souborů pro ${gameName}`);
+  return count;
+}
+
+/**
+ * Restore backup files for a game.
+ * @param {string} gameName
+ * @param {string} gameDir
+ * @returns {Promise<number>} number of files restored
+ */
+async function restoreBackup(gameName, gameDir) {
+  const gameBackupDir = path.join(BACKUP_ROOT, gameName);
+  const backupRootResolved = path.resolve(gameBackupDir);
+  if (!fssync.existsSync(backupRootResolved)) {
+    throw new Error('Záloha nenalezena');
+  }
+  const relFiles = [];
+  const queue = [''];
+  while (queue.length) {
+    const rel = queue.pop();
+    const abs = path.join(gameBackupDir, rel);
+    const entries = await fs.readdir(abs, { withFileTypes: true });
+    for (const entry of entries) {
+      const childRel = path.join(rel, entry.name);
+      if (entry.isDirectory()) {
+        queue.push(childRel);
+      } else {
+        relFiles.push(childRel);
+      }
+    }
+  }
+  let restored = 0;
+  for (const rel of relFiles) {
+    const src = path.join(gameBackupDir, rel);
+    const dest = path.resolve(gameDir, rel);
+    if (!dest.startsWith(gameDir)) continue;
+    await fs.mkdir(path.dirname(dest), { recursive: true });
+    await fs.copyFile(src, dest);
+    restored++;
+  }
+  return restored;
+}
+
+/**
+ * Run git checkout -- resources-games/<game> to revert to repo state.
+ * Streams output to log.
+ * @param {string} gameName
+ */
+function gitRollback(gameName) {
+  if (!fssync.existsSync(path.join(state.wcgamesRoot, '.git'))) {
+    throw new Error('Nenalezen .git v kořeni wcgames');
+  }
+  const target = `resources-games/${gameName}`;
+  pushLog(`Git rollback start: ${target}`);
+  return new Promise((resolve, reject) => {
+    const proc = spawn('git', ['checkout', '--', target], {
+      cwd: state.wcgamesRoot,
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    proc.stdout.on('data', chunk => pushLog(chunk.toString().trimEnd()));
+    proc.stderr.on('data', chunk => pushLog(`ERR ${chunk.toString().trimEnd()}`));
+    proc.on('close', code => {
+      if (code === 0) {
+        pushLog(`Git rollback hotov: ${target}`);
+        resolve({ ok: true });
+      } else {
+        const msg = `Git rollback selhal (code ${code})`;
+        pushLog(msg);
+        reject(new Error(msg));
+      }
+    });
+  });
+}
+
+/**
+ * Get list of games with git changes under resources-games.
+ * @returns {Promise<Array<{name:string, files:number}>>}
+ */
+async function getChangedGames() {
+  const gitDir = path.join(state.wcgamesRoot, '.git');
+  if (!fssync.existsSync(gitDir)) return [];
+  return new Promise((resolve, reject) => {
+    const proc = spawn('git', ['status', '--porcelain', '--', 'resources-games'], {
+      cwd: state.wcgamesRoot,
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    let out = '';
+    let errBuf = '';
+    proc.stdout.on('data', chunk => { out += chunk.toString(); });
+    proc.stderr.on('data', chunk => { errBuf += chunk.toString(); });
+    proc.on('close', code => {
+      if (code !== 0) {
+        return reject(new Error(errBuf || `git status exited ${code}`));
+      }
+      const gameMap = new Map();
+      out.split('\n').filter(Boolean).forEach(line => {
+        const rel = line.slice(3).trim(); // status chars + space
+        if (!rel.startsWith('resources-games/')) return;
+        const parts = rel.split('/');
+        if (parts.length < 2) return;
+        const game = parts[1];
+        gameMap.set(game, (gameMap.get(game) || 0) + 1);
+      });
+      resolve(Array.from(gameMap.entries()).map(([name, files]) => ({ name, files })));
+    });
+  });
+}
+
+/**
  * Set gameBuildList to selected game in properties file.
  * @param {string} gameName
  * @returns {Promise<void>}
@@ -207,10 +340,26 @@ async function writeProperties(gameName) {
     const raw = await fs.readFile(state.propertiesPath, 'utf8');
     data = JSON.parse(raw);
   } catch {
-    // file missing or invalid, recreate
     data = {};
   }
   data.gameBuildList = gameName;
+  await fs.writeFile(state.propertiesPath, JSON.stringify(data, null, 2));
+}
+
+/**
+ * Write build list for multiple games.
+ * @param {string|string[]} games
+ */
+async function writeBuildList(games) {
+  const list = Array.isArray(games) ? games.filter(Boolean) : [games].filter(Boolean);
+  let data = {};
+  try {
+    const raw = await fs.readFile(state.propertiesPath, 'utf8');
+    data = JSON.parse(raw);
+  } catch {
+    data = {};
+  }
+  data.gameBuildList = list.join(',');
   await fs.writeFile(state.propertiesPath, JSON.stringify(data, null, 2));
 }
 
@@ -277,9 +426,7 @@ app.get('/api/config', async (_req, res) => {
 
 app.post('/api/config/path', async (req, res) => {
   const { resourcesRoot } = req.body || {};
-  if (!resourcesRoot) {
-    return res.status(400).json({ error: 'resourcesRoot is required' });
-  }
+  if (!resourcesRoot) return res.status(400).json({ error: 'resourcesRoot is required' });
   try {
     await updateRoots(resourcesRoot, true);
     res.json({
@@ -304,7 +451,6 @@ app.get('/api/logs/stream', (req, res) => {
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders();
   logClients.add(res);
-  // send backlog
   for (const entry of logBuffer) {
     res.write(`data: ${entry}\n\n`);
   }
@@ -333,6 +479,15 @@ app.get('/api/games/:game/sounds', async (req, res) => {
   }
 });
 
+app.get('/api/changes', async (_req, res) => {
+  try {
+    const games = await getChangedGames();
+    res.json({ games });
+  } catch (err) {
+    res.status(400).json({ error: err.message, games: [] });
+  }
+});
+
 app.get('/api/games/:game/audio', async (req, res) => {
   try {
     const { game } = req.params;
@@ -340,12 +495,8 @@ app.get('/api/games/:game/audio', async (req, res) => {
     if (!file) return res.status(400).json({ error: 'file is required' });
     const gameDir = await ensureGameExists(game);
     const target = path.resolve(gameDir, file);
-    if (!target.startsWith(gameDir)) {
-      return res.status(400).json({ error: 'Invalid file path' });
-    }
-    if (!fssync.existsSync(target)) {
-      return res.status(404).json({ error: 'File not found' });
-    }
+    if (!target.startsWith(gameDir)) return res.status(400).json({ error: 'Invalid file path' });
+    if (!fssync.existsSync(target)) return res.status(404).json({ error: 'File not found' });
     res.sendFile(target);
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -361,17 +512,14 @@ app.get('/api/games/:game/zip', async (req, res) => {
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', `attachment; filename="sfx-${game}.zip"`);
 
-    const archive = archiver('zip', { zlib: { level: 0 } }); // store, no compression
+    const archive = archiver('zip', { zlib: { level: 0 } });
     archive.on('error', err => {
       pushLog(`ZIP error: ${err.message}`);
       res.status(500).end();
     });
     archive.on('warning', err => {
-      if (err.code === 'ENOENT') {
-        pushLog(`ZIP warning: ${err.message}`);
-      } else {
-        pushLog(`ZIP error: ${err.message}`);
-      }
+      if (err.code === 'ENOENT') pushLog(`ZIP warning: ${err.message}`);
+      else pushLog(`ZIP error: ${err.message}`);
     });
 
     archive.pipe(res);
@@ -401,6 +549,65 @@ app.get('/api/uploads/:id/audio', async (req, res) => {
   res.sendFile(path.resolve(record.storedPath));
 });
 
+app.post('/api/rollback', async (req, res) => {
+  const { game } = req.body || {};
+  if (!game) {
+    return res.status(400).json({ error: 'game is required' });
+  }
+  try {
+    const gameDir = await ensureGameExists(game);
+    const restored = await restoreBackup(game, gameDir);
+    if (!restored) {
+      return res.status(404).json({ error: 'Žádné zálohy k obnovení' });
+    }
+    pushLog(`Rollback: obnovení ${restored} souborů pro ${game}`);
+    res.json({ ok: true, restored });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/git-rollback', async (req, res) => {
+  const { game, runStart = true } = req.body || {};
+  if (!game) return res.status(400).json({ error: 'game is required' });
+  try {
+    const gameDir = await ensureGameExists(game);
+    pushLog(`Požadavek git rollback pro ${game}`);
+    await gitRollback(game);
+    await writeBuildList([game]);
+    pushLog(`properties.build.json -> gameBuildList=${game}`);
+
+    let startInfo = null;
+    if (runStart) {
+      await stopStartJs('git-rollback');
+      startInfo = startStartJs();
+    }
+    res.json({ ok: true, startInfo });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/build-run', async (req, res) => {
+  const { games, runStart = true } = req.body || {};
+  if (!Array.isArray(games) || !games.length) {
+    return res.status(400).json({ error: 'games must be a non-empty array' });
+  }
+  try {
+    await Promise.all(games.map(ensureGameExists));
+    await writeBuildList(games);
+    pushLog(`properties.build.json -> gameBuildList=${games.join(',')}`);
+    let startInfo = null;
+    if (runStart) {
+      await stopStartJs('build-run');
+      startInfo = startStartJs();
+    }
+    res.json({ ok: true, startInfo });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 app.post('/api/apply', async (req, res) => {
   const { game, mappings, runStart = true } = req.body || {};
   if (!game) {
@@ -411,7 +618,9 @@ app.post('/api/apply', async (req, res) => {
   }
   try {
     const gameDir = await ensureGameExists(game);
+    await backupFiles(game, mappings, gameDir);
     const replaced = [];
+    const duplicates = [];
 
     for (const mapping of mappings) {
       const { target, replacementId } = mapping;
@@ -424,19 +633,37 @@ app.post('/api/apply', async (req, res) => {
       if (!destPath.startsWith(gameDir)) {
         throw new Error(`Invalid target path: ${target}`);
       }
+      if (fssync.existsSync(destPath)) {
+        const [hashSrc, hashDest] = await Promise.all([
+          hashFile(uploadRecord.storedPath),
+          hashFile(destPath)
+        ]);
+        if (hashSrc === hashDest) {
+          duplicates.push(target);
+          continue;
+        }
+      }
       await fs.mkdir(path.dirname(destPath), { recursive: true });
       await fs.copyFile(uploadRecord.storedPath, destPath);
       replaced.push({ target, source: uploadRecord.originalName });
     }
 
-    await writeProperties(game);
+    if (duplicates.length && !replaced.length) {
+      throw new Error(`Náhrady selhaly – shodné soubory: ${duplicates.join(', ')}`);
+    }
+    if (duplicates.length) {
+      pushLog(`Přeskočeno (shodné): ${duplicates.join(', ')}`);
+    }
+
+    await writeBuildList([game]);
     let startInfo = null;
     if (runStart) {
       await stopStartJs('apply');
       startInfo = startStartJs();
     }
+    pushLog(`Výměna zvuků pro ${game}: ${replaced.length} souborů`);
 
-    res.json({ ok: true, replaced, startInfo });
+    res.json({ ok: true, replaced, duplicates, startInfo });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
